@@ -2,127 +2,167 @@ import cv2
 import numpy as np
 import easyocr
 import os
+import re
 
 def main():
-    # 1. Load the image of the car
-    image_path = os.path.join(os.path.dirname(__file__), 'car.jpg')
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # 1. Load the image of the car (at original resolution for best OCR accuracy)
+    image_path = os.path.join(script_dir, 'car.jpg')
     print(f"Loading image from: {image_path}")
     image = cv2.imread(image_path)
-    
+
     if image is None:
         print(f"Error: Could not load image from {image_path}")
         return
 
-    # Resize the image for consistent processing size
-    # Keep the aspect ratio but scale width to 800px
     height, width = image.shape[:2]
-    new_width = 800
-    new_height = int((new_width / width) * height)
-    resized_image = cv2.resize(image, (new_width, new_height))
-    
-    # Save a copy for drawing the final bounding box
-    output_image = resized_image.copy()
+    print(f"Image resolution: {width}x{height}")
 
-    # 2. Preprocess the image
-    # Convert to grayscale
-    gray = cv2.cvtColor(resized_image, cv2.COLOR_BGR2GRAY)
-    
+    # Create a display-size copy (800px wide) for saving intermediate images
+    display_width = 800
+    display_height = int((display_width / width) * height)
+    display_image = cv2.resize(image, (display_width, display_height))
+
+    # 2. Preprocess the image (grayscale, blur, edge detection)
+    # Convert to grayscale — reduces 3-channel color to 1-channel intensity
+    gray = cv2.cvtColor(display_image, cv2.COLOR_BGR2GRAY)
+
     # Apply bilateral filter to reduce noise while keeping edges sharp
     blurred = cv2.bilateralFilter(gray, 11, 17, 17)
-    
-    # Canny Edge Detection
+
+    # Canny Edge Detection — highlights intensity transitions (edges)
     edged = cv2.Canny(blurred, 30, 200)
 
-    # 3. Find contours
-    contours, _ = cv2.findContours(edged.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    
-    # Sort contours by area descending and select top 30
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:30]
-    
-    plate_contour = None
-    cropped_plate = None
-    
-    for c in contours:
-        # Approximate the contour
-        peri = cv2.arcLength(c, True)
-        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-        
-        # A license plate is a rectangle, so it should have 4 corners
-        if len(approx) == 4:
-            x, y, w, h = cv2.boundingRect(approx)
-            aspect_ratio = w / float(h)
-            
-            # Standard Turkish license plate aspect ratio is around 2.0 to 5.5
-            # We filter based on aspect ratio to avoid wrong rectangles
-            if 2.0 <= aspect_ratio <= 5.5:
-                plate_contour = approx
-                # Crop the plate region with a dynamic padding to ensure no text is cut
-                padding_y = int(h * 0.1)
-                padding_x = int(w * 0.08)
-                y_start = max(0, y - padding_y)
-                y_end = min(new_height, y + h + padding_y)
-                x_start = max(0, x - padding_x)
-                x_end = min(new_width, x + w + padding_x)
-                
-                cropped_plate = resized_image[y_start:y_end, x_start:x_end]
-                break
+    # Save intermediate images for review
+    cv2.imwrite(os.path.join(script_dir, 'gray.jpg'), gray)
+    cv2.imwrite(os.path.join(script_dir, 'edged.jpg'), edged)
 
-    # Fallback to bounding box of largest rectangle if no ideal aspect ratio matches
-    if plate_contour is None and len(contours) > 0:
-        print("No perfect aspect-ratio contour found, using the largest 4-point contour.")
-        for c in contours:
-            peri = cv2.arcLength(c, True)
-            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-            if len(approx) == 4:
-                plate_contour = approx
-                x, y, w, h = cv2.boundingRect(approx)
-                padding_y = int(h * 0.1)
-                padding_x = int(w * 0.08)
-                y_start = max(0, y - padding_y)
-                y_end = min(new_height, y + h + padding_y)
-                x_start = max(0, x - padding_x)
-                x_end = min(new_width, x + w + padding_x)
-                cropped_plate = resized_image[y_start:y_end, x_start:x_end]
-                break
+    # 3. Detect text using EasyOCR on the full-resolution image
+    print("Initializing EasyOCR reader...")
+    reader = easyocr.Reader(['en'], gpu=False)
 
-    if cropped_plate is None:
-        print("Error: License plate region could not be isolated.")
+    print("Performing initial text detection on full-resolution image...")
+    results = reader.readtext(image)
+
+    if not results:
+        print("Error: No text detected in the image.")
         return
 
-    # Save intermediate images for review and portfolio documentation
-    cv2.imwrite(os.path.join(os.path.dirname(__file__), 'gray.jpg'), gray)
-    cv2.imwrite(os.path.join(os.path.dirname(__file__), 'edged.jpg'), edged)
-    cv2.imwrite(os.path.join(os.path.dirname(__file__), 'cropped_plate.jpg'), cropped_plate)
+    print(f"Found {len(results)} text region(s).")
+    for bbox, text, conf in results:
+        print(f"  -> '{text}' (confidence: {conf:.2f})")
 
-    # Draw the contour on the output image
-    cv2.drawContours(output_image, [plate_contour], -1, (0, 255, 0), 3)
-    cv2.imwrite(os.path.join(os.path.dirname(__file__), 'detected_plate.jpg'), output_image)
+    # 4. Find the plate region by grouping nearby text detections in the lower half
+    # Turkish plates have text in the lower portion of a car image
+    mid_y = height * 0.4
+    plate_detections = []
 
-    # 4. Pass the cropped plate image to EasyOCR
-    print("Initializing EasyOCR reader...")
-    reader = easyocr.Reader(['en'], gpu=False) # run on CPU for standard environment compatibility
-    
-    print("Performing OCR on the cropped plate...")
-    results = reader.readtext(cropped_plate)
-    
-    # 5. Extract and print the text
-    plate_text = ""
-    if results:
-        # Join detected text boxes and clean it up (spaces, special characters)
-        texts = [res[1] for res in results]
-        plate_text = " ".join(texts).upper().strip()
-        # Clean up typical OCR noise for license plates
-        clean_plate = "".join([c for c in plate_text if c.isalnum()])
-        
-        # Fix common Turkish plate 34 misreadings (like D4 -> 34, B4 -> 34, S4 -> 34, 84 -> 34)
-        if len(clean_plate) >= 2 and clean_plate[0] in ['D', 'B', 'S', '8', '0'] and clean_plate[1] == '4':
-            clean_plate = '34' + clean_plate[2:]
-            
-        print(f"\n=========================================")
-        print(f"Detected License Plate Text: {clean_plate}")
-        print(f"=========================================\n")
-    else:
-        print("Error: Could not read text from the cropped image.")
+    for bbox, text, conf in results:
+        center_y = sum(p[1] for p in bbox) / len(bbox)
+        if center_y > mid_y:
+            plate_detections.append((bbox, text, conf))
+
+    if not plate_detections:
+        # Fallback: use all detections
+        plate_detections = [(bbox, text, conf) for bbox, text, conf in results]
+
+    # Compute the bounding box that encompasses all plate-region text detections
+    all_x = []
+    all_y = []
+    for bbox, text, conf in plate_detections:
+        for point in bbox:
+            all_x.append(int(point[0]))
+            all_y.append(int(point[1]))
+
+    x_min = max(0, min(all_x))
+    x_max = min(width, max(all_x))
+    y_min = max(0, min(all_y))
+    y_max = min(height, max(all_y))
+
+    # Add generous padding around the detected text area
+    pad_x = int((x_max - x_min) * 0.15)
+    pad_y = int((y_max - y_min) * 0.25)
+    x_min = max(0, x_min - pad_x)
+    x_max = min(width, x_max + pad_x)
+    y_min = max(0, y_min - pad_y)
+    y_max = min(height, y_max + pad_y)
+
+    # 5. Crop the plate region from the full-resolution image and enhance it
+    plate_crop = image[y_min:y_max, x_min:x_max]
+
+    # Upscale 2x for better OCR accuracy on small text
+    plate_upscaled = cv2.resize(plate_crop, (0, 0), fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+
+    # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) for enhanced contrast
+    gray_plate = cv2.cvtColor(plate_upscaled, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    enhanced_plate = clahe.apply(gray_plate)
+
+    # 6. Run OCR again on the enhanced, upscaled plate crop
+    print("Performing OCR on enhanced plate region...")
+    enhanced_results = reader.readtext(enhanced_plate)
+
+    plate_fragments = []
+    for bbox, text, conf in enhanced_results:
+        clean = re.sub(r'[^A-Z0-9]', '', text.upper())
+        if not clean:
+            continue
+
+        # Filter out blue-band text ("TR", "TRL") and known logo noise
+        if clean in ['TR', 'TRL', 'T', 'R']:
+            continue
+
+        # Get center x-position for sorting left-to-right
+        center_x = sum(p[0] for p in bbox) / len(bbox)
+        # Get center y-position for filtering (plate text is in lower half of crop)
+        center_y = sum(p[1] for p in bbox) / len(bbox)
+        crop_h = enhanced_plate.shape[0]
+
+        # Only keep fragments in the lower 70% of the crop (skip logos above plate)
+        if center_y < crop_h * 0.3:
+            continue
+
+        plate_fragments.append((clean, conf, center_x))
+        print(f"  -> '{clean}' (confidence: {conf:.2f})")
+
+    if not plate_fragments:
+        print("Error: Could not read text from the enhanced plate region.")
+        return
+
+    # Sort fragments left-to-right by x-position and combine
+    plate_fragments.sort(key=lambda x: x[2])
+    combined_plate = "".join([frag for frag, conf, cx in plate_fragments])
+
+    # Apply common OCR corrections for Turkish plates
+    # Fix city code 34 misreadings: D4->34, B4->34, O4->34, 04->34, 24->34
+    if len(combined_plate) >= 2:
+        first_two = combined_plate[:2]
+        if first_two in ['04', '24', 'D4', 'B4', 'O4', 'S4']:
+            combined_plate = '34' + combined_plate[2:]
+
+    # 7. Draw bounding box on display image and save outputs
+    scale_x = display_width / width
+    scale_y = display_height / height
+    output_image = display_image.copy()
+
+    # Draw rectangle on display image at the scaled coordinates
+    dx_min = int(x_min * scale_x)
+    dx_max = int(x_max * scale_x)
+    dy_min = int(y_min * scale_y)
+    dy_max = int(y_max * scale_y)
+    cv2.rectangle(output_image, (dx_min, dy_min), (dx_max, dy_max), (0, 255, 0), 3)
+
+    # Put the detected text above the rectangle
+    cv2.putText(output_image, combined_plate, (dx_min, dy_min - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+
+    cv2.imwrite(os.path.join(script_dir, 'detected_plate.jpg'), output_image)
+    cv2.imwrite(os.path.join(script_dir, 'cropped_plate.jpg'), plate_crop)
+
+    print(f"\n=========================================")
+    print(f"Detected License Plate Text: {combined_plate}")
+    print(f"=========================================\n")
 
 if __name__ == '__main__':
     main()

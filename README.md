@@ -1,6 +1,6 @@
 # i2i Academy - Applied Image Processing (i2i-Academy-AppliedImageProcessing-1)
 
-This project implements an Automated License Plate Recognition (ALPR) module using OpenCV and EasyOCR. It detects, segments, and extracts the text from a vehicle's license plate.
+This project implements an Automated License Plate Recognition (ALPR) module using OpenCV and EasyOCR. It detects, segments, and extracts the text from a vehicle's license plate in a real-world photograph.
 
 ---
 
@@ -31,8 +31,10 @@ python3 main.py
 
 ### Expected Output
 The script will:
-1. Load `car.jpg`.
-2. Clean the image (grayscale, blur, Canny edge detection).
-3. Find and isolate the license plate contour.
-4. Perform OCR on the cropped plate area.
-5. Print the recognized license plate text to the terminal and display the intermediate processing steps.
+1. Load the full-resolution `car.jpg` (a real photograph from Wikimedia Commons).
+2. Perform image preprocessing (grayscale conversion, bilateral filtering, Canny edge detection).
+3. Use EasyOCR's CRAFT-based text detector to locate text regions in the image.
+4. Crop the license plate area, upscale it 2x, and apply CLAHE contrast enhancement.
+5. Run OCR on the enhanced plate crop and combine detected text fragments.
+6. Print the recognized license plate text to the terminal (e.g., `34EPE495`).
+7. Save intermediate images: `gray.jpg`, `edged.jpg`, `cropped_plate.jpg`, `detected_plate.jpg`.
