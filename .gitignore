@@ -1,6 +1,10 @@
 __pycache__/
 .DS_Store
-*.jpg
-*.png
 venv/
 .venv/
+
+# Ignore generated output images, but track the input car.jpg
+gray.jpg
+edged.jpg
+cropped_plate.jpg
+detected_plate.jpg
