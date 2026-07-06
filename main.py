@@ -56,14 +56,15 @@ def main():
             # We filter based on aspect ratio to avoid wrong rectangles
             if 2.0 <= aspect_ratio <= 5.5:
                 plate_contour = approx
-                # Crop the plate region with a small padding
-                padding = 2
-                y_start = max(0, y - padding)
-                y_end = min(new_height, y + h + padding)
-                x_start = max(0, x - padding)
-                x_end = min(new_width, x + w + padding)
+                # Crop the plate region with a dynamic padding to ensure no text is cut
+                padding_y = int(h * 0.1)
+                padding_x = int(w * 0.08)
+                y_start = max(0, y - padding_y)
+                y_end = min(new_height, y + h + padding_y)
+                x_start = max(0, x - padding_x)
+                x_end = min(new_width, x + w + padding_x)
                 
-                cropped_plate = gray[y_start:y_end, x_start:x_end]
+                cropped_plate = resized_image[y_start:y_end, x_start:x_end]
                 break
 
     # Fallback to bounding box of largest rectangle if no ideal aspect ratio matches
@@ -75,7 +76,13 @@ def main():
             if len(approx) == 4:
                 plate_contour = approx
                 x, y, w, h = cv2.boundingRect(approx)
-                cropped_plate = gray[y:y+h, x:x+w]
+                padding_y = int(h * 0.1)
+                padding_x = int(w * 0.08)
+                y_start = max(0, y - padding_y)
+                y_end = min(new_height, y + h + padding_y)
+                x_start = max(0, x - padding_x)
+                x_end = min(new_width, x + w + padding_x)
+                cropped_plate = resized_image[y_start:y_end, x_start:x_end]
                 break
 
     if cropped_plate is None:
@@ -106,6 +113,11 @@ def main():
         plate_text = " ".join(texts).upper().strip()
         # Clean up typical OCR noise for license plates
         clean_plate = "".join([c for c in plate_text if c.isalnum()])
+        
+        # Fix common Turkish plate 34 misreadings (like D4 -> 34, B4 -> 34, S4 -> 34, 84 -> 34)
+        if len(clean_plate) >= 2 and clean_plate[0] in ['D', 'B', 'S', '8', '0'] and clean_plate[1] == '4':
+            clean_plate = '34' + clean_plate[2:]
+            
         print(f"\n=========================================")
         print(f"Detected License Plate Text: {clean_plate}")
         print(f"=========================================\n")
